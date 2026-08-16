@@ -1,4 +1,4 @@
-const CACHE_NAME = 'rutamoto-v3';
+const CACHE_NAME = 'rutamoto-v4';
 const SHELL_ASSETS = [
   './',
   './index.html',
