@@ -1,0 +1,1 @@
+import{Ka as t}from"./chunk-F2MTNWHK.js";var n=class e{formatter=new Intl.NumberFormat("es-CO",{style:"currency",currency:"COP",maximumFractionDigits:0});transform(r){return r==null||Number.isNaN(r)?"$\xA00":this.formatter.format(r)}static \u0275fac=function(i){return new(i||e)};static \u0275pipe=t({name:"copCurrency",type:e,pure:!0})};export{n as a};
