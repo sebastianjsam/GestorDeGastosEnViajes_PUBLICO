@@ -1,1 +1,0 @@
-import{R as e,na as o}from"./chunk-4PDGJC63.js";var t=class n{online=o(typeof navigator>"u"||navigator.onLine);constructor(){window.addEventListener("online",()=>this.online.set(!0)),window.addEventListener("offline",()=>this.online.set(!1))}static \u0275fac=function(i){return new(i||n)};static \u0275prov=e({token:n,factory:n.\u0275fac,providedIn:"root"})};export{t as a};
