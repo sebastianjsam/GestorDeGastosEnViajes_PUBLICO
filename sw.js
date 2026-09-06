@@ -1,4 +1,6 @@
-const CACHE_NAME = 'rutamoto-v5';
+const CACHE_NAME = 'rutamoto-v6';
+const TILE_CACHE_NAME = 'rutamoto-tiles-v1';
+const TILE_CACHE_MAX_ENTRIES = 500;
 const SHELL_ASSETS = [
   './',
   './index.html',
@@ -8,17 +10,11 @@ const SHELL_ASSETS = [
   './icons/icon-512.png',
 ];
 
-const CACHEABLE_API_ORIGINS = [
-  'api.open-meteo.com',
-  'api.rainviewer.com',
-  'tilecache.rainviewer.com',
-  'overpass-api.de',
-  'tile.openstreetmap.org',
-];
+const isTileRequest = (url) => /(^|\.)tile\.openstreetmap\.org$/.test(url.hostname);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_ASSETS).catch(() => undefined))
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_ASSETS))
   );
   self.skipWaiting();
 });
@@ -28,7 +24,7 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((k) => k !== CACHE_NAME && k !== 'rutamoto-offline-tiles-v1')
+          .filter((k) => k !== CACHE_NAME && k !== TILE_CACHE_NAME)
           .map((k) => caches.delete(k))
       )
     )
@@ -36,99 +32,61 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+/** Evita que el caché de tiles crezca sin límite (mapa offline de las últimas rutas vistas). */
+async function trimTileCache() {
+  const cache = await caches.open(TILE_CACHE_NAME);
+  const keys = await cache.keys();
+  if (keys.length > TILE_CACHE_MAX_ENTRIES) {
+    await cache.delete(keys[0]);
+  }
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.method !== 'GET') {
-    return;
-  }
   const url = new URL(request.url);
 
-  if (url.hostname === 'tile.openstreetmap.org') {
+  // Tiles de OpenStreetMap: cache-first (son inmutables) para que el mapa de una
+  // ruta ya visitada siga visible sin conexión. Cross-origin: respuesta opaca,
+  // igual se puede guardar en Cache Storage.
+  if (isTileRequest(url)) {
     event.respondWith(
-      caches.open('rutamoto-offline-tiles-v1').then(async (tileCache) => {
-        const cached = await tileCache.match(request);
-        if (cached) return cached;
-        try {
-          const res = await fetch(request);
-          if (res.ok) tileCache.put(request, res.clone());
-          return res;
-        } catch {
-          return new Response(null, { status: 503 });
-        }
-      })
-    );
-    return;
-  }
-
-  if (CACHEABLE_API_ORIGINS.some((origin) => url.hostname.includes(origin))) {
-    event.respondWith(
-      caches.open(CACHE_NAME).then(async (apiCache) => {
-        const cached = await apiCache.match(request);
-        const fetchPromise = fetch(request)
-          .then((res) => {
-            if (res.ok) apiCache.put(request, res.clone());
-            return res;
-          })
-          .catch(() => null);
-
+      caches.open(TILE_CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(request);
         if (cached) {
-          event.waitUntil(fetchPromise);
-          return cached;
-        }
-        return (
-          fetchPromise ||
-          new Response(JSON.stringify({ offline: true }), {
-            status: 503,
-            headers: { 'Content-Type': 'application/json' },
-          })
-        );
-      })
-    );
-    return;
-  }
-
-  if (request.mode === 'navigate') {
-    event.respondWith(
-      (async () => {
-        try {
-          const res = await fetch(request);
-          if (res.ok) {
-            const cache = await caches.open(CACHE_NAME);
-            cache.put('./index.html', res.clone());
-            return res;
-          }
-        } catch {
-          // sin red
-        }
-        return (
-          (await caches.match('./index.html')) ||
-          (await caches.match('./')) ||
-          new Response('Sin conexión', { status: 503 })
-        );
-      })()
-    );
-    return;
-  }
-
-  if (url.origin === self.location.origin) {
-    const hashed = /\.[a-f0-9]{8,}\.(js|css|woff2?)$/i.test(url.pathname);
-    event.respondWith(
-      caches.match(request).then(async (cached) => {
-        if (cached && hashed) {
           return cached;
         }
         try {
           const response = await fetch(request);
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-          }
+          await cache.put(request, response.clone());
+          trimTileCache();
           return response;
-        } catch {
-          if (cached) return cached;
-          throw new Error('offline');
+        } catch (err) {
+          return cached || Response.error();
         }
       })
     );
+    return;
   }
+
+  if (url.origin !== self.location.origin) return;
+
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request).catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  event.respondWith(
+    caches.match(request).then((cached) => {
+      const fetched = fetch(request).then((response) => {
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+        }
+        return response;
+      });
+      return cached || fetched;
+    })
+  );
 });
