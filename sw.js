@@ -1,14 +1,14 @@
-const CACHE_NAME = 'rutamoto-v5';
+// scripts/prepare-gitpages.mjs reemplaza estas dos líneas en cada build: la versión
+// cambia con cada deploy (el navegador instala el SW nuevo) y la lista incluye
+// todos los archivos del build, para que la app completa funcione sin red desde
+// la primera apertura.
+const CACHE_NAME = 'rutamoto-6893bb7f6a8d';
+const SHELL_ASSETS = ["./","./chunk-2VA4JMPW.js","./chunk-3VANKBZQ.js","./chunk-4G7KHGS4.js","./chunk-5ZWFAY7G.js","./chunk-AF5RPGXI.js","./chunk-B6XQIZRZ.js","./chunk-BZGZOLNQ.js","./chunk-C25CXQJ3.js","./chunk-CLHUVQDU.js","./chunk-CWGXLQT5.js","./chunk-CYYWPSPV.js","./chunk-CZIRWT3X.js","./chunk-ECCTIAX6.js","./chunk-F2MTNWHK.js","./chunk-GK2HWQSC.js","./chunk-HHZ5QIUF.js","./chunk-JBTN2QVT.js","./chunk-JWZZDMR5.js","./chunk-KBWWX7Z7.js","./chunk-KLWOF72M.js","./chunk-KXYFAKEI.js","./chunk-LAJG77HD.js","./chunk-LLJWH6VW.js","./chunk-MO53D34K.js","./chunk-OM3EZPQC.js","./chunk-PK276FZ6.js","./chunk-QOTCB33J.js","./chunk-RFJ3TSDW.js","./chunk-SEII26K4.js","./chunk-SMBMMGUL.js","./chunk-TOSP2MQU.js","./chunk-VAPDPOQL.js","./chunk-VEEZUON3.js","./chunk-VZRA4ED7.js","./chunk-W5JZ5JE3.js","./chunk-WMXDZCNB.js","./chunk-WOEIOP7Z.js","./chunk-WOTJ5SBX.js","./chunk-WU6FXXZK.js","./chunk-XLQK4FYU.js","./chunk-XPVRA33Q.js","./chunk-XX3UDOCO.js","./chunk-ZJKAJOLT.js","./favicon.ico","./icon.svg","./icons/icon-128.png","./icons/icon-144.png","./icons/icon-152.png","./icons/icon-192.png","./icons/icon-384.png","./icons/icon-512.png","./icons/icon-72.png","./icons/icon-96.png","./index.html","./main-AYPCBQQ4.js","./manifest.json","./media/layers-2x-TBM42ERR.png","./media/layers-55W3Q4RM.png","./media/marker-icon-2V3QKKVC.png","./polyfills-5CFQRCPP.js","./styles-BBKVSA4K.css"];
+
 const TILE_CACHE_NAME = 'rutamoto-offline-tiles-v1';
 const TILE_CACHE_MAX_ENTRIES = 500;
-const SHELL_ASSETS = [
-  './',
-  './index.html',
-  './manifest.json',
-  './favicon.ico',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
-];
+/** Con señal débil, tras este tiempo se abre la copia guardada en vez de esperar la red. */
+const NAVIGATE_TIMEOUT_MS = 3000;
 
 const CACHEABLE_API_ORIGINS = [
   'api.open-meteo.com',
@@ -19,21 +19,24 @@ const CACHEABLE_API_ORIGINS = [
 ];
 
 self.addEventListener('install', (event) => {
+  // Uno a uno: si un archivo falla, el resto igual queda disponible offline.
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_ASSETS).catch(() => undefined))
+    caches
+      .open(CACHE_NAME)
+      .then((cache) => Promise.allSettled(SHELL_ASSETS.map((asset) => cache.add(asset))))
   );
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((k) => k !== CACHE_NAME && k !== TILE_CACHE_NAME)
-          .map((k) => caches.delete(k))
-      )
-    )
+    // Conserva también la versión anterior: una pestaña que siga abierta con ella
+    // puede pedir sus chunks aunque ya no existan en el servidor.
+    caches.keys().then((keys) => {
+      // rutamoto-offline-*: mapas y rutas guardados por el usuario, no dependen de la versión.
+      const shells = keys.filter((k) => k !== CACHE_NAME && !k.startsWith('rutamoto-offline-'));
+      return Promise.all(shells.slice(0, -1).map((k) => caches.delete(k)));
+    })
   );
   self.clients.claim();
 });
@@ -105,14 +108,17 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       (async () => {
         try {
-          const res = await fetch(request);
+          const timeout = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('timeout')), NAVIGATE_TIMEOUT_MS)
+          );
+          const res = await Promise.race([fetch(request), timeout]);
           if (res.ok) {
             const cache = await caches.open(CACHE_NAME);
             cache.put('./index.html', res.clone());
             return res;
           }
         } catch {
-          // sin red
+          // sin red o señal débil
         }
         return (
           (await caches.match('./index.html')) ||
@@ -125,7 +131,8 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (url.origin === self.location.origin) {
-    const hashed = /\.[a-f0-9]{8,}\.(js|css|woff2?)$/i.test(url.pathname);
+    // Angular nombra los archivos con hash como chunk-AB12CD34.js / styles-AB12CD34.css.
+    const hashed = /[-.][A-Z0-9]{8,}\.(js|css|woff2?)$/i.test(url.pathname);
     event.respondWith(
       caches.match(request).then(async (cached) => {
         if (cached && hashed) {
